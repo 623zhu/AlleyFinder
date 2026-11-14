@@ -1,10 +1,12 @@
 import os
-
 from pathlib import Path
 from dotenv import load_dotenv
 import requests
 from openai import OpenAI
 from openai.types.chat.chat_completion_message_param import ChatCompletionMessageParam
+ 
+import trafilatura
+from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(ROOT / ".env")
@@ -22,7 +24,7 @@ def show_response_error(response: requests.Response) -> None:
 def chat(messages:list[ChatCompletionMessageParam]) -> str:
     client = OpenAI(api_key=env("deepseek_api_key"), base_url=env("deepseek_api_url"))
     reply = client.chat.completions.create(
-        model="deepseek-chat",
+        model="deepseek-flash",
         messages=messages,
         response_format={"type": "json_object"}
     )
@@ -75,6 +77,7 @@ def search_poi(keywords:str,city:str) ->list[dict]:
             "key": env("gaode_api_key"),
             "keywords": keywords,
             "city": city,
+            "citylimit": "true",
             "output": "json",
         },
         timeout=30
@@ -95,7 +98,59 @@ def search_poi(keywords:str,city:str) ->list[dict]:
             "address":point.get("address") or "",
             "location":point.get("location") or "",
             "district":point.get("adname") or "",
+            "cityname":point.get("cityname") or "",
             "type":point.get("type") or "",
         })
     return results
-    
+
+
+SKIP_HOSTS = (
+    "douyin.com",
+    "iesdouyin.com",
+    "xiaohongshu.com",
+    "xhslink.com",
+    "xhs.com",
+    # 深筛实测多次请求均抽不出正文（JS 空壳 / 登录墙）
+    "ditu.so.com",
+    "map.so.com",
+    "chachaba.com",
+    "dianping.com",
+    "mafengwo.cn",
+    "11467.com",
+    "toutiao.com",
+    "laowusk.com",
+)
+
+def _host_skipped(url: str) -> bool:
+    host = urlparse(url).netloc.lower()
+    return any(host == h or host.endswith("." + h) for h in SKIP_HOSTS)
+
+def fetch_text(url: str) -> str:
+    if not url or _host_skipped(url):
+        return ""
+    try:
+        response = requests.get(
+            url,
+            timeout=15,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/122.0.0.0 Safari/537.36"
+                ),
+            },
+            allow_redirects=True,
+        )
+        if response.status_code >= 400 or not response.text:
+            return ""
+        text = trafilatura.extract(
+            response.text,
+            url=url,
+            include_comments=True,
+            include_tables=False,
+        )
+    except Exception:
+        return ""
+    text = (text or "").strip()
+    # 登录墙、JS 空壳往往只有几十个字，当失败
+    return text if len(text) >= 80 else ""

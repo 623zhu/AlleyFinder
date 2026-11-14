@@ -4,3 +4,5 @@ __pycache__/
 data/
 *.pyc
 .ipynb_checkpoints/
+web/node_modules/
+web/.next/
