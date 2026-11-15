@@ -131,7 +131,7 @@ def fetch_text(url: str) -> str:
     try:
         response = requests.get(
             url,
-            timeout=15,
+            timeout=(3, 8),
             headers={
                 "User-Agent": (
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "

@@ -8,7 +8,7 @@ CITY_CATALOG = ("成都", "广州", "武汉")
 
 
 def known_city(city: str) -> bool:
-    return city in CITY_CATALOG
+    return bool(normalize_city(city))
 
 
 def city_ready(city: str) -> bool:

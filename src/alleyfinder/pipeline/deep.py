@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-import time
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from alleyfinder.clients import chat, fetch_text, search_web
 from alleyfinder.db import (
@@ -15,6 +16,19 @@ from alleyfinder.pipeline.common import ProgressFn, emit, normalize, normalize_c
 from alleyfinder.prompts.review import SYSTEM_PROMPT, page_kind_and_body, user_prompt
 
 KEEP_N = 10
+BOCHA_LIMIT = 5
+MAX_SHOP_WORKERS = 20
+FETCH_WORKERS = 8
+FETCH_LIMIT = 16
+
+_log_lock = threading.Lock()
+_bocha = threading.Semaphore(BOCHA_LIMIT)
+_fetch = threading.Semaphore(FETCH_LIMIT)
+
+
+def _log(message: str) -> None:
+    with _log_lock:
+        print(message)
 
 
 def shop_aliases(shop: dict) -> list[str]:
@@ -37,10 +51,20 @@ def pages_about_shop(pages: list[dict], names: list[str]) -> list[dict]:
 
 
 def fill_page_text(pages: list[dict]) -> None:
-    for page in pages:
-        url = page.get("url") or ""
-        page["text"] = fetch_text(url)
-        time.sleep(0.2)
+    if not pages:
+        return
+
+    def one(page: dict) -> None:
+        with _fetch:
+            page["text"] = fetch_text(page.get("url") or "")
+
+    if len(pages) == 1:
+        one(pages[0])
+        return
+
+    workers = min(len(pages), FETCH_WORKERS)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        list(pool.map(one, pages))
 
 
 def page_sources(pages: list[dict]) -> list[dict]:
@@ -167,6 +191,77 @@ def score(shop: dict, review: dict, n_pages: int) -> float:
     return s
 
 
+def shop_label(shop: dict) -> str:
+    return str(shop.get("name_raw") or shop.get("name") or "").strip()
+
+
+def review_one_shop(city: str, shop: dict) -> dict:
+    shop_name = shop_label(shop)
+    query = f"{shop_name} {city} 评价"
+    _log(f"正在搜索：{query}")
+
+    try:
+        with _bocha:
+            try:
+                pages = search_web(query, 8)
+            except Exception as exc:
+                _log(f"搜索失败：{exc}")
+                pages = []
+
+        hit = pages_about_shop(pages, shop_aliases(shop))
+        if hit:
+            _log(f"  命中 {len(hit)} 条，抓取正文… {shop_name}")
+            fill_page_text(hit)
+
+        sources = page_sources(hit)
+        n_body = sum(1 for s in sources if s["kind"] == "正文")
+        n_summary = sum(1 for s in sources if s["kind"] == "摘要")
+        if hit:
+            _log(f"  正文 {n_body} / 摘要 {n_summary}  {shop_name}")
+
+        extract_failed = False
+        if hit:
+            try:
+                review = tidy_review(extract_review(city, shop, hit), hit)
+            except Exception as exc:
+                _log(f"抽取失败 {shop_name}: {exc}")
+                review = {}
+                extract_failed = True
+        else:
+            review = {}
+
+        reason = drop_reason(review, hit, extract_failed=extract_failed)
+        n_pages = len(hit)
+        row = {
+            **shop,
+            "query": query,
+            "n_pages": n_pages,
+            "n_body": n_body,
+            "n_summary": n_summary,
+            "urls": [p.get("url") for p in hit],
+            "sources": sources,
+            "review": review,
+        }
+        if reason:
+            row["drop_reason"] = reason
+        else:
+            row["score"] = score(shop, review, n_pages)
+        return row
+    except Exception as exc:
+        _log(f"深筛失败 {shop_name}: {exc}")
+        return {
+            **shop,
+            "query": query,
+            "n_pages": 0,
+            "n_body": 0,
+            "n_summary": 0,
+            "urls": [],
+            "sources": [],
+            "review": {},
+            "drop_reason": "口碑抽取失败",
+        }
+
+
 def card_row(row: dict) -> dict:
     review = row.get("review") or {}
     return {
@@ -215,64 +310,26 @@ def deep_rank(
     clear_reviews(name)
     emit(progress, "reviewing", f"深筛 {len(shops)} 家")
 
-    for index, shop in enumerate(shops, start=1):
-        shop_name = shop.get("name_raw") or shop.get("name") or ""
-        query = f"{shop_name} {name} 评价"
-        print(f"正在搜索：{query}")
-        emit(progress, "reviewing", f"{index}/{len(shops)} {shop_name}")
-
-        try:
-            pages = search_web(query, 8)
-        except Exception as exc:
-            print(f"搜索失败：{exc}")
-            pages = []
-        time.sleep(0.3)
-
-        hit = pages_about_shop(pages, shop_aliases(shop))
-        if hit:
-            print(f"  命中 {len(hit)} 条，抓取正文…")
-            fill_page_text(hit)
-
-        sources = page_sources(hit)
-        n_body = sum(1 for s in sources if s["kind"] == "正文")
-        n_summary = sum(1 for s in sources if s["kind"] == "摘要")
-        if hit:
-            print(f"  正文 {n_body} / 摘要 {n_summary}")
-
-        extract_failed = False
-        if hit:
-            try:
-                review = tidy_review(extract_review(name, shop, hit), hit)
-            except Exception as exc:
-                print(f"抽取失败 {shop_name}: {exc}")
-                review = {}
-                extract_failed = True
-        else:
-            review = {}
-
-        reason = drop_reason(review, hit, extract_failed=extract_failed)
-        n_pages = len(hit)
-        row = {
-            **shop,
-            "query": query,
-            "n_pages": n_pages,
-            "n_body": n_body,
-            "n_summary": n_summary,
-            "urls": [p.get("url") for p in hit],
-            "sources": sources,
-            "review": review,
-        }
-        if reason:
-            row["drop_reason"] = reason
-            dropped.append(row)
-            print(f"[剔除] {shop_name} | {reason}")
-        else:
-            row["score"] = score(shop, review, n_pages)
-            kept.append(row)
-            preview = (review.get("reason") or "")[:40]
-            print(f"[留下] {shop_name} | {row['score']:.1f} | 正文{n_body}/{n_pages} | {preview}")
-
-        append_review(name, row)
+    workers = max(1, min(MAX_SHOP_WORKERS, len(shops)))
+    done = 0
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [pool.submit(review_one_shop, name, shop) for shop in shops]
+        for future in as_completed(futures):
+            row = future.result()
+            append_review(name, row)
+            done += 1
+            shop_name = shop_label(row)
+            emit(progress, "reviewing", f"{done}/{len(shops)} {shop_name}")
+            if row.get("drop_reason"):
+                dropped.append(row)
+                _log(f"[剔除] {shop_name} | {row['drop_reason']}")
+            else:
+                kept.append(row)
+                preview = ((row.get("review") or {}).get("reason") or "")[:40]
+                _log(
+                    f"[留下] {shop_name} | {row['score']:.1f} | "
+                    f"正文{row.get('n_body')}/{row.get('n_pages')} | {preview}"
+                )
 
     kept.sort(key=lambda x: x["score"], reverse=True)
     ranked = [card_row(row) for row in kept[:keep_n]]

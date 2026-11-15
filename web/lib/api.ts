@@ -34,6 +34,14 @@ export type RankingResponse = {
   shops: ShopCard[];
 };
 
+export type JobStatus = {
+  city: string;
+  status: "idle" | "queued" | "running" | "done" | "error" | string;
+  stage: string;
+  message: string;
+  error: string | null;
+};
+
 export class ApiError extends Error {
   status: number;
 
@@ -53,8 +61,8 @@ async function readError(response: Response) {
   return "巷子里暂时没回音";
 }
 
-async function getJson<T>(path: string): Promise<T> {
-  const response = await fetch(path);
+async function getJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(path, init);
   if (!response.ok) {
     throw new ApiError(response.status, await readError(response));
   }
@@ -79,4 +87,16 @@ export function fetchShop(city: string, poiId: string) {
   return getJson<ShopCard>(
     `/api/cities/${encodeURIComponent(normalizeCityName(city))}/shops/${encodeURIComponent(poiId)}`,
   );
+}
+
+function jobPath(city: string) {
+  return `/api/cities/${encodeURIComponent(normalizeCityName(city))}/jobs`;
+}
+
+export function fetchJob(city: string) {
+  return getJson<JobStatus>(jobPath(city));
+}
+
+export function createJob(city: string) {
+  return getJson<JobStatus>(jobPath(city), { method: "POST" });
 }

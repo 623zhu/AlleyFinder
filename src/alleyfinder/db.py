@@ -61,6 +61,15 @@ CREATE TABLE IF NOT EXISTS rankings (
     PRIMARY KEY (city, rank)
 );
 CREATE INDEX IF NOT EXISTS idx_rankings_city_poi ON rankings(city, poi_id);
+
+CREATE TABLE IF NOT EXISTS jobs (
+    city TEXT PRIMARY KEY,
+    status TEXT NOT NULL,
+    stage TEXT NOT NULL DEFAULT '',
+    message TEXT NOT NULL DEFAULT '',
+    error TEXT,
+    updated_at TEXT NOT NULL
+);
 """
 
 
@@ -85,6 +94,7 @@ def connect():
     conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(SCHEMA)
     try:
         yield conn
@@ -286,33 +296,57 @@ def get_ranking_shop(city: str, poi_id: str) -> dict | None:
     return _loads(row["payload"]) if row else None
 
 
-def _read_jsonl(path: Path) -> list[dict]:
-    rows: list[dict] = []
-    if not path.is_file():
-        return rows
-    with path.open(encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if line:
-                rows.append(json.loads(line))
-    return rows
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
-def import_jsonl_dir(city: str, src_dir: Path) -> None:
-    src = Path(src_dir)
-    mentions = _read_jsonl(src / "mentions.jsonl")
-    shops = _read_jsonl(src / "shops.jsonl")
-    shortlist = _read_jsonl(src / "shortlist.jsonl")
-    screen_dropped = _read_jsonl(src / "screen_dropped.jsonl")
-    reviews = _read_jsonl(src / "reviews.jsonl")
-    ranked = _read_jsonl(src / "ranked.jsonl")
-    if mentions:
-        replace_mentions(city, mentions)
-    if shops:
-        replace_shops(city, shops)
-    if shortlist or screen_dropped:
-        replace_shortlist(city, shortlist, screen_dropped)
-    if reviews:
-        replace_reviews(city, reviews)
-    if ranked:
-        replace_rankings(city, ranked)
+def _job_dict(row: sqlite3.Row) -> dict:
+    return {
+        "city": row["city"],
+        "status": row["status"],
+        "stage": row["stage"] or "",
+        "message": row["message"] or "",
+        "error": row["error"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def upsert_job(
+    city: str,
+    *,
+    status: str,
+    stage: str = "",
+    message: str = "",
+    error: str | None = None,
+) -> dict:
+    name = _city(city)
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO jobs(city, status, stage, message, error, updated_at)
+            VALUES (?,?,?,?,?,?)
+            ON CONFLICT(city) DO UPDATE SET
+                status=excluded.status,
+                stage=excluded.stage,
+                message=excluded.message,
+                error=excluded.error,
+                updated_at=excluded.updated_at
+            """,
+            (name, status, stage, message, error, _now()),
+        )
+    row = get_job(name)
+    if row is None:
+        raise RuntimeError(f"写入 {name} 任务失败")
+    return row
+
+
+def get_job(city: str) -> dict | None:
+    name = normalize_city(city)
+    if not name:
+        return None
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT city, status, stage, message, error, updated_at FROM jobs WHERE city=?",
+            (name,),
+        ).fetchone()
+    return _job_dict(row) if row else None

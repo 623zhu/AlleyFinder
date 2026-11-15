@@ -2,7 +2,7 @@
 
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
-import { HOT_CITIES, isKnownCity, normalizeCityName } from "@/lib/cities";
+import { HOT_CITIES, normalizeCityName } from "@/lib/cities";
 import { cityPath } from "@/lib/api";
 import { Seal } from "./Seal";
 
@@ -16,10 +16,6 @@ export function HomeScreen() {
     const name = normalizeCityName(city);
     if (!name) {
       setError("先写一座城市");
-      return;
-    }
-    if (!isKnownCity(name)) {
-      setError("这座城市还没探到");
       return;
     }
     setError("");
@@ -83,7 +79,7 @@ export function HomeScreen() {
         </div>
       </form>
 
-      <p className="footer">不看装修和热度，只找街坊愿意再吃的小馆子</p>
+      <p className="footer">第一次探一座城大约要几分钟，可以先离开再回来</p>
     </main>
   );
 }

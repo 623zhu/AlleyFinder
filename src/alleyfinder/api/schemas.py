@@ -50,3 +50,11 @@ class RankingResponse(BaseModel):
     city: str
     count: int
     shops: list[ShopCard]
+
+
+class JobStatus(BaseModel):
+    city: str
+    status: str
+    stage: str = ""
+    message: str = ""
+    error: str | None = None

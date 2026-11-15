@@ -3,29 +3,95 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { ApiError, fetchRanking, shopPath, type RankingResponse } from "@/lib/api";
+import {
+  ApiError,
+  createJob,
+  fetchJob,
+  fetchRanking,
+  shopPath,
+  type RankingResponse,
+} from "@/lib/api";
 import { Seal } from "./Seal";
 
 export function RankingScreen() {
   const params = useParams<{ city: string }>();
   const city = decodeURIComponent(params.city ?? "");
   const [data, setData] = useState<RankingResponse | null>(null);
+  const [progress, setProgress] = useState("巷子探着…");
   const [error, setError] = useState("");
+  const [retry, setRetry] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
-    fetchRanking(city)
-      .then((payload) => {
-        if (!cancelled) setData(payload);
-      })
-      .catch((exc: unknown) => {
+    let timer = 0;
+
+    function later(fn: () => void) {
+      timer = window.setTimeout(fn, 2000);
+    }
+
+    async function showRanking() {
+      const payload = await fetchRanking(city);
+      if (cancelled) return;
+      setData(payload);
+      setError("");
+      setProgress("");
+    }
+
+    async function pollJob() {
+      try {
+        const job = await fetchJob(city);
+        if (cancelled) return;
+        if (job.status === "done") {
+          try {
+            await showRanking();
+          } catch {
+            if (!cancelled) setError("这座城市没探到合适的馆子");
+          }
+          return;
+        }
+        if (job.status === "error") {
+          setError(job.error || job.message || "探巷失败");
+          return;
+        }
+        setProgress(job.message || "巷子探着…");
+        later(() => {
+          void pollJob();
+        });
+      } catch (exc: unknown) {
         if (cancelled) return;
         setError(exc instanceof ApiError ? exc.message : "巷子里暂时没回音");
-      });
+      }
+    }
+
+    setData(null);
+    setError("");
+    setProgress("巷子探着…");
+
+    void (async () => {
+      try {
+        await showRanking();
+      } catch (exc: unknown) {
+        if (cancelled) return;
+        if (!(exc instanceof ApiError) || exc.status !== 404) {
+          setError(exc instanceof ApiError ? exc.message : "巷子里暂时没回音");
+          return;
+        }
+        try {
+          await createJob(city);
+          if (cancelled) return;
+          await pollJob();
+        } catch (start: unknown) {
+          if (cancelled) return;
+          setError(start instanceof ApiError ? start.message : "巷子里暂时没回音");
+        }
+      }
+    })();
+
     return () => {
       cancelled = true;
+      if (timer) window.clearTimeout(timer);
     };
-  }, [city]);
+  }, [city, retry]);
 
   if (error) {
     return (
@@ -35,6 +101,9 @@ export function RankingScreen() {
           巷探
         </p>
         <p className="tagline">{error}</p>
+        <button type="button" className="pill" onClick={() => setRetry((n) => n + 1)}>
+          再探一次
+        </button>
         <Link href="/">回起点</Link>
       </main>
     );
@@ -44,6 +113,9 @@ export function RankingScreen() {
     return (
       <main className="shell empty">
         <p className="tagline">巷子探着…</p>
+        {progress ? <p className="note">{progress}</p> : null}
+        <p className="note">可以先离开，过一会儿再来</p>
+        <Link href="/">回起点</Link>
       </main>
     );
   }
