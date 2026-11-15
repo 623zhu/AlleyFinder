@@ -1,18 +1,19 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import { HOT_CITIES, isKnownCity } from "@/lib/cities";
+import { useRouter } from "next/navigation";
+import { HOT_CITIES, isKnownCity, normalizeCityName } from "@/lib/cities";
+import { cityPath } from "@/lib/api";
 import { Seal } from "./Seal";
 
 export function HomeScreen() {
+  const router = useRouter();
   const [city, setCity] = useState("武汉");
   const [error, setError] = useState("");
-  const [note, setNote] = useState("");
 
   function submit(event?: FormEvent) {
     event?.preventDefault();
-    const name = city.trim();
-    setNote("");
+    const name = normalizeCityName(city);
     if (!name) {
       setError("先写一座城市");
       return;
@@ -22,7 +23,7 @@ export function HomeScreen() {
       return;
     }
     setError("");
-    setNote("榜单还在整理，先从这一页看起");
+    router.push(cityPath(name));
   }
 
   return (
@@ -53,14 +54,12 @@ export function HomeScreen() {
             onChange={(event) => {
               setCity(event.target.value);
               setError("");
-              setNote("");
             }}
             placeholder="输入城市"
             autoComplete="off"
           />
         </div>
         {error ? <p className="error">{error}</p> : null}
-        {note ? <p className="note">{note}</p> : null}
 
         <button className="cta" type="submit">
           开始找馆子 <span aria-hidden>→</span>
@@ -76,7 +75,6 @@ export function HomeScreen() {
               onClick={() => {
                 setCity(name);
                 setError("");
-                setNote("");
               }}
             >
               {name}

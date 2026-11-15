@@ -11,11 +11,7 @@ OUT = ROOT / "data" / "spike_wuhan" / "shortlist.jsonl"
 DROP_LOG = ROOT / "data" / "spike_wuhan" / "screen_dropped.jsonl"
 KEEP_N = 30
 CITY = "武汉"
-WUHAN_DISTRICTS = {
-    "江岸区", "江汉区", "硚口区", "汉阳区", "武昌区",
-    "青山区", "洪山区", "蔡甸区", "江夏区", "黄陂区",
-    "新洲区", "东西湖区", "汉南区",
-}
+
 MALL_WORDS = (
     "万达", "商场", "购物中心", "商超", "超市", "美食广场",
     "美食街", "百货", "国金天地", "汉街万达",

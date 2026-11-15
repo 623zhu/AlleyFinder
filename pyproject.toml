@@ -8,6 +8,7 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "fastapi>=0.162.7",
     "httpx>=0.28.1",
     "openai>=3.50.0",
     "pydantic>=2.14.3",
@@ -15,10 +16,12 @@ dependencies = [
     "pyyaml>=6.0.3",
     "requests>=2.34.2",
     "trafilatura>=2.3.1",
+    "uvicorn>=0.54.0",
 ]
 
 [project.scripts]
 alleyfinder = "alleyfinder:main"
+alleyfinder-api = "alleyfinder.api.app:serve"
 
 [build-system]
 requires = ["uv_build>=0.13.8,<0.14.0"]
